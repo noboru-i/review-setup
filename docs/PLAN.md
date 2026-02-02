@@ -14,18 +14,31 @@
 ## 3. 前提条件
 
 ### 3.1 必要なツール・環境
-- **OS**: macOS
+- **OS**: macOS (Mission Control対応)
+- **Swift**: バージョン 6.2以降
+- **Xcode Command Line Tools**: Swiftコンパイラ
 - **Git**: バージョン 2.5以降（git worktree対応）
 - **ghq**: リポジトリ管理ツール
 - **gh**: GitHub CLI
 - **VS Code**: エディタ
 - **ブラウザ**: Chrome, Safari, Firefox等
 - **macOS Mission Control**: 仮想デスクトップ機能
+- **Accessibility権限**: Mission Control操作に必要
 
 ### 3.2 事前設定
 - ghqによるリポジトリ管理が設定済み
 - VS Codeがコマンドラインから起動可能（`code`コマンド）
 - GitHub CLIが認証設定済み（`gh auth login`で認証完了）
+- **macOS権限の許可**:
+  - **Accessibility権限**（必須）:
+    - システム設定 > プライバシーとセキュリティ > アクセシビリティ
+    - ターミナルまたは実行バイナリ（`review-setup`）を許可リストに追加
+    - Mission Control UI操作、ウィンドウ配置に必要
+  - **入力監視権限**（デスクトップ移動に必要）:
+    - システム設定 > プライバシーとセキュリティ > 入力監視
+    - ターミナルまたは実行バイナリを許可リストに追加
+    - キーボードショートカット（Control + 矢印）のシミュレーションに必要
+  - 初回実行時にダイアログが表示される
 
 ## 4. システム構成
 
@@ -135,173 +148,402 @@ done
 ### 5.3 仮想デスクトップ管理
 
 #### 5.3.1 新規デスクトップ作成
-```applescript
-tell application "System Events"
-    -- Mission Controlを起動
-    do shell script "open -a 'Mission Control'"
-    delay 0.5
-    
-    -- 新規デスクトップを追加（右側に）
-    key code 124 using {control down}  -- 右矢印
-    delay 0.3
-    keystroke "+" using {option down}
-    delay 0.5
-    
-    -- Mission Controlを閉じる
-    key code 53  -- ESC
-end tell
+
+**Swift + Accessibility API方式**
+
+従来のAppleScript + キーボードショートカット方式ではなく、Accessibility APIを使用してDockプロセスのUI要素を直接操作します。
+
+```swift
+// MissionControlManagerクラスによる実装
+func createNewDesktop() throws {
+    // 1. Mission Controlを起動
+    openMissionControl()
+
+    // 2. DockアプリケーションのAccessibility要素を取得
+    guard let dockApp = NSRunningApplication.runningApplications(
+        withBundleIdentifier: "com.apple.dock"
+    ).first else {
+        throw NSError(domain: "MissionControl", code: 1)
+    }
+
+    let dockElement = AXUIElementCreateApplication(dockApp.processIdentifier)
+
+    // 3. Mission Controlグループを再帰的に探索
+    var missionControlGroup: AXUIElement?
+    findMissionControlGroup(in: dockElement, result: &missionControlGroup)
+
+    // 4. "デスクトップを追加" / "add desktop" ボタンを探索
+    let addButton = findAddDesktopButton(in: missionControlGroup)
+
+    // 5. ボタンをプレス
+    AXUIElementPerformAction(addButton, kAXPressAction as CFString)
+
+    // 6. Mission Controlを閉じる
+    openMissionControl()
+}
 ```
 
+**利点**:
+- キーボードショートカットに依存せず、より確実
+- 言語設定（日本語/英語）に対応（ボタンのdescriptionで判定）
+- Mission Controlのレイアウト変更に強い
+- キー入力タイミングの調整が不要
+
 #### 5.3.2 作成したデスクトップへ移動
-```applescript
-tell application "System Events"
-    key code 124 using {control down}  -- 右へ移動
-end tell
+
+**Swift + CGEvent API方式**
+
+CGEventを使用してキーボードショートカット（Control + 右矢印）をシミュレートします。
+
+```swift
+func moveToNextDesktop() {
+    // Control + 右矢印キーのシミュレーション
+    let rightArrowKeyCode: CGKeyCode = 124
+
+    // Controlキーを押す
+    let controlDown = CGEvent(
+        keyboardEventSource: nil,
+        virtualKey: 59, // Control key
+        keyDown: true
+    )
+    controlDown?.flags = .maskControl
+    controlDown?.post(tap: .cghidEventTap)
+
+    // 右矢印キーを押す
+    let keyDown = CGEvent(
+        keyboardEventSource: nil,
+        virtualKey: rightArrowKeyCode,
+        keyDown: true
+    )
+    keyDown?.flags = .maskControl
+    keyDown?.post(tap: .cghidEventTap)
+
+    // 右矢印キーを離す
+    let keyUp = CGEvent(
+        keyboardEventSource: nil,
+        virtualKey: rightArrowKeyCode,
+        keyDown: false
+    )
+    keyUp?.flags = .maskControl
+    keyUp?.post(tap: .cghidEventTap)
+
+    // Controlキーを離す
+    let controlUp = CGEvent(
+        keyboardEventSource: nil,
+        virtualKey: 59,
+        keyDown: false
+    )
+    controlUp?.post(tap: .cghidEventTap)
+
+    // デスクトップ切り替えアニメーション待機
+    Thread.sleep(forTimeInterval: 0.5)
+}
 ```
+
+**注意**: CGEventを使用するには、アクセシビリティ権限に加えて入力監視権限が必要です。
 
 ### 5.4 アプリケーション配置
 
 #### 5.4.1 ブラウザ起動と配置（左1/3）
 
-**複数ウィンドウ環境への対応**
+**Swift + Accessibility API方式**
 
-既存のChromeウィンドウが複数開いている可能性を考慮し、新規ウィンドウを作成してそれを操作対象とします。
+NSWorkspaceでブラウザを起動し、Accessibility APIでウィンドウを配置します。
 
-```applescript
-tell application "Google Chrome"
-    -- 新規ウィンドウで開く
-    make new window
-    set URL of active tab of front window to "${PR_URL}"
-    delay 1.5  -- ウィンドウが完全に開くまで待機
-end tell
+```swift
+class WindowManager {
+    func openBrowserAndArrange(url: String, position: LayoutPosition) throws {
+        // 1. ブラウザを起動してURLを開く
+        guard let urlObj = URL(string: url) else {
+            throw NSError(domain: "WindowManager", code: 1,
+                         userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
+        }
 
-tell application "System Events"
-    tell process "Google Chrome"
-        -- front window（最前面=今開いたウィンドウ）を対象に配置
-        set position of front window to {0, 0}
-        set size of front window to {screen_width / 3, screen_height}
-    end tell
-end tell
+        // デフォルトブラウザで開く
+        NSWorkspace.shared.open(urlObj)
+
+        // または特定のブラウザで開く場合
+        // NSWorkspace.shared.open([urlObj],
+        //     withApplicationAt: URL(fileURLWithPath: "/Applications/Google Chrome.app"),
+        //     configuration: NSWorkspace.OpenConfiguration())
+
+        // ブラウザウィンドウが開くまで待機
+        Thread.sleep(forTimeInterval: 2.0)
+
+        // 2. ブラウザプロセスを取得
+        let browserApps = NSWorkspace.shared.runningApplications.filter {
+            $0.bundleIdentifier == "com.google.Chrome" ||
+            $0.bundleIdentifier == "com.apple.Safari" ||
+            $0.bundleIdentifier == "org.mozilla.firefox"
+        }
+
+        guard let browserApp = browserApps.first else {
+            throw NSError(domain: "WindowManager", code: 2,
+                         userInfo: [NSLocalizedDescriptionKey: "Browser not found"])
+        }
+
+        // 3. Accessibility要素を取得
+        let appElement = AXUIElementCreateApplication(browserApp.processIdentifier)
+
+        // 4. 最前面のウィンドウを取得
+        var windowRef: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &windowRef
+        )
+
+        guard error == .success, let window = windowRef else {
+            throw NSError(domain: "WindowManager", code: 3,
+                         userInfo: [NSLocalizedDescriptionKey: "Window not found"])
+        }
+
+        // 5. スクリーン解像度を取得
+        guard let screen = NSScreen.main else {
+            throw NSError(domain: "WindowManager", code: 4)
+        }
+        let screenFrame = screen.visibleFrame
+
+        // 6. ウィンドウ位置とサイズを設定（左1/3）
+        let width = screenFrame.width / 3
+        let height = screenFrame.height
+        let x = screenFrame.minX
+        let y = screenFrame.minY
+
+        try setWindowPosition(window as! AXUIElement, x: x, y: y)
+        try setWindowSize(window as! AXUIElement, width: width, height: height)
+    }
+
+    private func setWindowPosition(_ window: AXUIElement, x: CGFloat, y: CGFloat) throws {
+        var position = CGPoint(x: x, y: y)
+        let positionValue = AXValueCreate(.cgPoint, &position)!
+
+        let error = AXUIElementSetAttributeValue(
+            window,
+            kAXPositionAttribute as CFString,
+            positionValue
+        )
+
+        guard error == .success else {
+            throw NSError(domain: "WindowManager", code: 5)
+        }
+    }
+
+    private func setWindowSize(_ window: AXUIElement, width: CGFloat, height: CGFloat) throws {
+        var size = CGSize(width: width, height: height)
+        let sizeValue = AXValueCreate(.cgSize, &size)!
+
+        let error = AXUIElementSetAttributeValue(
+            window,
+            kAXSizeAttribute as CFString,
+            sizeValue
+        )
+
+        guard error == .success else {
+            throw NSError(domain: "WindowManager", code: 6)
+        }
+    }
+}
+
+enum LayoutPosition {
+    case left, center, right
+}
 ```
 
-**代替案：URLでウィンドウを特定する方法**
-
-```applescript
-tell application "Google Chrome"
-    make new window
-    set URL of active tab of front window to "${PR_URL}"
-    delay 1.5
-    
-    -- 対象ウィンドウをURLで特定
-    set targetWindow to null
-    repeat with w in windows
-        if URL of active tab of w contains "${REPO_PATH}" then
-            set targetWindow to w
-            exit repeat
-        end if
-    end repeat
-end tell
-
-tell application "System Events"
-    tell process "Google Chrome"
-        if targetWindow is not null then
-            set position of targetWindow to {0, 0}
-            set size of targetWindow to {screen_width / 3, screen_height}
-        end if
-    end tell
-end tell
-```
+**利点**:
+- 複数のブラウザ（Chrome、Safari、Firefox）に対応
+- デフォルトブラウザを使用可能
+- ウィンドウの正確な位置・サイズ設定
+- エラーハンドリングが明確
 
 #### 5.4.2 VS Code起動と配置（中央1/3）
 
-**複数ウィンドウ環境への対応**
+**Swift + Process + Accessibility API方式**
 
-既存のVS Codeウィンドウが複数開いている可能性を考慮し、新規ウィンドウとして起動してそれを操作対象とします。
+Processでコマンドラインから起動し、Accessibility APIでウィンドウを配置します。
 
-```bash
-# VS Codeを新規ウィンドウとして起動（-nオプション）
-code -n "${WORKTREE_PATH}"
+```swift
+extension WindowManager {
+    func openVSCodeAndArrange(path: String, position: LayoutPosition) throws {
+        // 1. VS Codeを新規ウィンドウで起動
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/local/bin/code")
+        task.arguments = ["-n", path]  // -n: 新規ウィンドウ
+
+        try task.run()
+
+        // VS Codeウィンドウが開くまで待機
+        Thread.sleep(forTimeInterval: 2.5)
+
+        // 2. VS Codeプロセスを取得
+        guard let vscodeApp = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == "com.microsoft.VSCode"
+        }) else {
+            throw NSError(domain: "WindowManager", code: 7,
+                         userInfo: [NSLocalizedDescriptionKey: "VS Code not found"])
+        }
+
+        // 3. Accessibility要素を取得
+        let appElement = AXUIElementCreateApplication(vscodeApp.processIdentifier)
+
+        // 4. 最前面のウィンドウを取得（最後に開いたウィンドウ）
+        var windowRef: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &windowRef
+        )
+
+        guard error == .success, let window = windowRef else {
+            // フォーカスされたウィンドウがない場合、全ウィンドウから検索
+            try arrangeVSCodeWindowByTitle(appElement, searchPath: path, position: position)
+            return
+        }
+
+        // 5. スクリーン解像度を取得
+        guard let screen = NSScreen.main else {
+            throw NSError(domain: "WindowManager", code: 8)
+        }
+        let screenFrame = screen.visibleFrame
+
+        // 6. ウィンドウ位置とサイズを設定（中央1/3）
+        let width = screenFrame.width / 3
+        let height = screenFrame.height
+        let x = screenFrame.minX + width  // 左1/3の右側
+        let y = screenFrame.minY
+
+        try setWindowPosition(window as! AXUIElement, x: x, y: y)
+        try setWindowSize(window as! AXUIElement, width: width, height: height)
+    }
+
+    // ウィンドウタイトルで特定する代替方法
+    private func arrangeVSCodeWindowByTitle(
+        _ appElement: AXUIElement,
+        searchPath: String,
+        position: LayoutPosition
+    ) throws {
+        var windowsRef: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXWindowsAttribute as CFString,
+            &windowsRef
+        )
+
+        guard error == .success,
+              let windows = windowsRef as? [AXUIElement] else {
+            throw NSError(domain: "WindowManager", code: 9)
+        }
+
+        // パス名（pr-XXX）を含むウィンドウを検索
+        let pathComponent = URL(fileURLWithPath: searchPath).lastPathComponent
+
+        for window in windows {
+            var titleRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(
+                window,
+                kAXTitleAttribute as CFString,
+                &titleRef
+            )
+
+            if let title = titleRef as? String,
+               title.contains(pathComponent) {
+                // ウィンドウを配置
+                guard let screen = NSScreen.main else { continue }
+                let screenFrame = screen.visibleFrame
+                let width = screenFrame.width / 3
+                let height = screenFrame.height
+                let x = screenFrame.minX + width
+                let y = screenFrame.minY
+
+                try? setWindowPosition(window, x: x, y: y)
+                try? setWindowSize(window, width: width, height: height)
+                return
+            }
+        }
+
+        throw NSError(domain: "WindowManager", code: 10,
+                     userInfo: [NSLocalizedDescriptionKey: "VS Code window not found"])
+    }
+}
 ```
 
-```applescript
-tell application "System Events"
-    tell process "Code"
-        -- 起動直後のウィンドウ表示待機
-        delay 2
-        
-        -- front window（最前面=今開いたウィンドウ）を対象に配置
-        set position of front window to {screen_width / 3, 0}
-        set size of front window to {screen_width / 3, screen_height}
-    end tell
-end tell
-```
-
-**代替案：ウィンドウタイトルで特定する方法**
-
-worktreeのディレクトリ名（pr-{番号}）がウィンドウタイトルに含まれることを利用して特定します。
-
-```applescript
-tell application "System Events"
-    tell process "Code"
-        delay 2  -- ウィンドウが完全に開くまで待機
-        
-        -- worktreeパスを含むウィンドウを検索
-        repeat with w in windows
-            if name of w contains "pr-${pr_number}" then
-                set position of w to {screen_width / 3, 0}
-                set size of w to {screen_width / 3, screen_height}
-                exit repeat
-            end if
-        end repeat
-    end tell
-end tell
-```
-
-**注意事項**
-- `-n` オプションを使用することで、常に新規ウィンドウで開く
-- `delay 2` により、VS Codeが完全に起動してウィンドウが表示されるのを待つ
-- ウィンドウタイトルによる特定は、VS Codeのバージョンやテーマによって動作が異なる可能性があるため、`front window`方式を推奨
+**注意事項**:
+- `code`コマンドのパスは環境により異なる（`/usr/local/bin/code`、`/opt/homebrew/bin/code`等）
+- `which code`で確認するか、設定ファイルで指定可能にする
+- VS Codeの起動に時間がかかる場合は待機時間を調整
+- フォーカスされたウィンドウがない場合、タイトル検索にフォールバック
 
 ## 6. 技術要件
 
-### 6.1 スクリプト構成
+### 6.1 プロジェクト構成
+
+**Swiftプロジェクト構成**
 
 ```
-pr-review-setup/
+review-setup/
+├── Package.swift                           # Swift Package Manager設定
+├── Sources/
+│   └── review-setup/
+│       └── review_setup.swift              # メイン実装
+│           ├── MissionControlManager       # デスクトップ作成・移動
+│           ├── WindowManager               # ブラウザ/VS Code配置
+│           └── ReviewSetupApp (@main)      # エントリーポイント、CLI引数解析
 ├── bin/
-│   ├── setup-pr-review.sh       # メインスクリプト
+│   ├── setup-pr-review.sh                  # メインスクリプト (Shell)
 │   └── lib/
-│       ├── github.sh            # GitHub API操作
-│       ├── worktree.sh          # Git worktree操作
-│       ├── desktop.sh           # デスクトップ管理
-│       └── layout.sh            # ウィンドウレイアウト
+│       ├── github.sh                       # GitHub API操作
+│       └── worktree.sh                     # Git worktree操作
 ├── config/
-│   ├── config.yml               # 設定ファイル
-│   └── copy-files.txt           # コピー対象ファイルリスト
-└── applescript/
-    ├── create-desktop.scpt      # デスクトップ作成
-    └── arrange-windows.scpt     # ウィンドウ配置
+│   ├── config.yml                          # 設定ファイル
+│   └── copy-files.txt                      # コピー対象ファイルリスト
+└── docs/
+    └── PLAN.md                             # 設計資料
 ```
 
-### 6.2 複数ウィンドウ環境への対応方針
+**Swiftコードの責務**:
+- デスクトップ作成（Mission Control UI操作）
+- デスクトップ間移動（キーボードショートカットシミュレーション）
+- ブラウザ起動とウィンドウ配置（Accessibility API）
+- VS Code起動とウィンドウ配置（Process + Accessibility API）
+- CLI引数に基づく動作切り替え（`--create-desktop`, `--arrange-browser`, `--arrange-vscode`等）
+
+**Shellスクリプトの責務**:
+- PR情報の解析とgh CLI連携
+- Git worktreeの作成・管理
+- 設定ファイルの読み込みとファイルコピー
+- 全体のワークフロー制御とエラーハンドリング
+
+**技術スタック**:
+- **Swift 6.2+**: Mission Control操作、ウィンドウ管理の実装言語
+- **Accessibility API (AXUIElement)**: UI要素の探索と操作、ウィンドウ配置
+- **CGEvent API**: キーボードショートカットのシミュレーション（デスクトップ移動）
+- **Cocoa (NSWorkspace)**: アプリケーションの起動とURL処理
+- **Bash/Shell**: PR情報取得、worktree管理、全体フロー制御
+- **gh CLI**: GitHub PR情報取得とチェックアウト
+
+### 6.2 複数ウィンドウ環境への対応方針（Swift実装）
 
 本ワークフローは、ChromeやVS Codeで既に複数のウィンドウが開かれている環境を前提とします。
 
 **基本方針**
 1. **新規ウィンドウの作成**: 既存ウィンドウに影響を与えないよう、常に新規ウィンドウを作成
-2. **front windowの活用**: 新規作成直後の `front window` を操作対象とする
-3. **適切な待機時間**: ウィンドウが完全に表示されるまで `delay` を設ける
+2. **フォーカスウィンドウの活用**: Accessibility APIの`kAXFocusedWindowAttribute`で最前面ウィンドウを取得
+3. **適切な待機時間**: ウィンドウが完全に表示されるまで`Thread.sleep()`で待機
 
-**実装上の注意点**
-- Chrome: `make new window` で新規ウィンドウを作成
-- VS Code: `code -n` オプションで新規ウィンドウとして起動
-- 待機時間: Chrome 1.5秒、VS Code 2秒を推奨（環境により調整が必要）
-- `window 1` や `window 2` といったインデックス指定は避ける（順序が保証されないため）
+**Swift実装上の注意点**
+- **ブラウザ**: `NSWorkspace.shared.open(url)`でURLを開く（新規ウィンドウは自動）
+- **VS Code**: `Process()`で`code -n`を実行し新規ウィンドウとして起動
+- **待機時間**: ブラウザ 2.0秒、VS Code 2.5秒を推奨（環境により調整が必要）
+- **ウィンドウ属性**: Accessibility APIで`kAXPositionAttribute`と`kAXSizeAttribute`を設定
 
 **ウィンドウ特定の優先順位**
-1. **推奨**: `front window` - 最も確実で簡潔
-2. **代替**: URLやタイトルで特定 - より厳密だが複雑
-3. **非推奨**: インデックス指定 - 複数ウィンドウ環境では不安定
+1. **推奨**: `kAXFocusedWindowAttribute` - 最も確実で簡潔
+2. **代替**: `kAXWindowsAttribute`で全ウィンドウを取得し、タイトルで検索 - より厳密だが複雑
+3. **非推奨**: 配列インデックス指定 - 複数ウィンドウ環境では不安定
+
+**必要な権限**
+- **Accessibility権限**: ウィンドウの位置・サイズ変更に必須
+- **入力監視権限**: キーボードショートカット（デスクトップ移動）に必須
 
 ### 6.2.1 lib/github.sh 実装例
 ```bash
@@ -480,14 +722,15 @@ main() {
     log "Step 2.1: 指定ファイルをコピー中..."
     copy_ignored_files "${owner}" "${repo}" "${worktree_path}"
     
-    # Step 3: 仮想デスクトップ作成
+    # Step 3: 仮想デスクトップ作成（Swiftバイナリ使用）
     log "Step 3: 新規仮想デスクトップを作成中..."
-    create_new_desktop
+    "${SCRIPT_DIR}/../.build/release/review-setup"
     
-    # Step 4: アプリケーション配置
+    # Step 4: アプリケーション配置（Swiftバイナリ使用）
     log "Step 4: アプリケーションを配置中..."
-    arrange_browser "${pr_url}"
-    arrange_vscode "${worktree_path}"
+    "${SCRIPT_DIR}/../.build/release/review-setup" \
+        --arrange-browser "${pr_url}" \
+        --arrange-vscode "${worktree_path}"
     
     log "セットアップ完了！"
     log "Worktree: ${worktree_path}"
@@ -509,19 +752,29 @@ main "$1"
 ### 9.1 初回セットアップ
 
 ```bash
-# スクリプトのインストール
-git clone https://github.com/yourusername/pr-review-setup.git
-cd pr-review-setup
+# リポジトリのクローン
+git clone https://github.com/yourusername/review-setup.git
+cd review-setup
 
-# 実行権限付与
+# Swiftバイナリのビルド
+swift build -c release
+
+# ビルド成果物の確認
+.build/release/review-setup
+
+# シェルスクリプトに実行権限付与
 chmod +x bin/setup-pr-review.sh
 
 # PATHに追加（.zshrcまたは.bashrc）
-export PATH="$PATH:/path/to/pr-review-setup/bin"
+export PATH="$PATH:/path/to/review-setup/bin"
+export PATH="$PATH:/path/to/review-setup/.build/release"
 
 # 設定ファイル編集
 cp config/config.yml.example config/config.yml
-vi config/config.yml  # GitHub tokenなど設定
+vi config/config.yml  # 必要に応じて設定
+
+# Accessibility権限の確認
+# 初回実行時にダイアログが表示されるので許可する
 ```
 
 ### 9.2 日常的な使用
@@ -561,11 +814,18 @@ cleanup_worktree() {
 
 ### 11.1 Phase 2: 追加機能候補
 
+**Swift実装での拡張**:
+- **ターミナル配置**: 右1/3領域にターミナルアプリを配置（Accessibility API）
+- **カスタムレイアウト**: 設定ファイルでウィンドウ分割比率を変更可能に
+- **マルチディスプレイ対応**: 外部ディスプレイへの配置オプション
+- **デスクトップ名設定**: Mission Control APIでデスクトップに名前を設定
+- **アプリケーション選択**: ブラウザ（Chrome/Safari/Firefox）の選択機能
+
+**Shell実装での拡張**:
 - **自動テスト実行**: worktree作成後、自動でテストを実行
-- **差分ハイライト**: PRの変更ファイルをVS Codeで自動的に開く
-- **コメント連携**: PR上のコメントをVS Code内で確認
-- **ターミナル配置**: 右1/3領域にターミナルを配置
-- **マルチPR対応**: 複数のPRを同時にレビュー
+- **差分ハイライト**: PRの変更ファイルをVS Codeで自動的に開く（`code -d`）
+- **コメント連携**: gh CLIでPRコメントを取得して表示
+- **マルチPR対応**: 複数のPRを同時にレビュー（複数デスクトップ作成）
 - **Slack通知**: レビュー開始/完了をSlackに通知
 
 ### 11.2 Phase 3: 高度な機能
@@ -574,19 +834,33 @@ cleanup_worktree() {
 - **依存関係チェック**: 変更による影響範囲の自動分析
 - **パフォーマンス計測**: worktree環境でのベンチマーク実行
 - **Docker連携**: コンテナ環境での動作確認
+- **Swift Package化**: review-setup をライブラリとして他のツールから利用可能に
 
 ## 12. セキュリティ考慮事項
 
 ### 12.1 認証情報の管理
 
-- GitHub Personal Access Tokenは環境変数で管理
+- **GitHub認証**: gh CLIの認証情報を使用（Personal Access Token不要）
 - コピーする設定ファイルに機密情報が含まれる場合は暗号化を検討
 - .gitignoreされたファイルのコピーはホワイトリスト方式
 
-### 12.2 アクセス制御
+### 12.2 macOS権限とアクセス制御
 
-- スクリプトは個人のホームディレクトリ内で実行
+**Accessibility権限の影響範囲**:
+- Accessibility APIは他のアプリケーションのUI要素にアクセス可能
+- ウィンドウ位置・サイズの取得と変更のみに使用
+- 機密情報の読み取りは行わない
+
+**入力監視権限の影響範囲**:
+- CGEvent APIはキーボード入力のシミュレーションが可能
+- Control + 矢印キーのみをシミュレート
+- ユーザー入力のキャプチャは行わない
+
+**実行ファイルの管理**:
+- Swiftバイナリは個人のホームディレクトリ内で実行
 - 他ユーザーからの読み取りを制限（chmod 700）
+- コード署名（Code Signing）を推奨
+- ビルド成果物（`.build/release/review-setup`）の配布には注意
 
 ## 13. パフォーマンス最適化
 
@@ -610,6 +884,28 @@ cleanup_worktree() {
 - PR情報のローカルキャッシュ（一定期間）
 - ghqリポジトリパスのキャッシュ
 
+### 13.3 Swift実装の最適化
+
+**起動速度の改善**:
+```bash
+# リリースビルドの最適化
+swift build -c release -Xswiftc -O
+
+# バイナリサイズの削減（strip symbols）
+strip .build/release/review-setup
+```
+
+**待機時間の調整**:
+- Mission Control表示待機: 1.0秒（デフォルト）
+- ブラウザ起動待機: 2.0秒（デフォルト）
+- VS Code起動待機: 2.5秒（デフォルト）
+- 環境に応じて設定ファイルで調整可能にする
+
+**Accessibility API呼び出しの最適化**:
+- 再帰的UI探索の深さ制限
+- タイムアウト設定（無限ループ防止）
+- エラー時の早期リターン
+
 ## 14. トラブルシューティング
 
 ### 14.1 よくある問題
@@ -628,26 +924,84 @@ gh pr view ${pr_number}
 
 **Q: デスクトップ作成がうまくいかない**
 ```bash
-# macOSのアクセシビリティ権限を確認
+# 1. macOSのアクセシビリティ権限を確認
 # システム設定 > プライバシーとセキュリティ > アクセシビリティ
-# ターミナルまたはスクリプト実行アプリを追加
+# ターミナルまたは実行バイナリ (review-setup) を許可リストに追加
+
+# 2. Swiftバイナリが正しくビルドされているか確認
+ls -la .build/release/review-setup
+
+# 3. Mission Controlが正常に動作するか確認
+open -a "Mission Control"
+
+# 4. デバッグ実行
+.build/release/review-setup
+# エラーメッセージを確認
 ```
 
 **Q: VS Codeが正しい位置に配置されない**
 ```bash
-# ディスプレイ解像度の取得がうまくいっていない可能性
-# layout.shのscreen_width, screen_height計算を確認
+# 1. VS Codeが完全に起動しているか確認
+# 起動に時間がかかる場合、待機時間を延ばす
+
+# 2. code コマンドのパスを確認
+which code
+
+# 3. マルチディスプレイ環境の場合
+# NSScreen.mainが正しいディスプレイを取得しているか確認
+```
+
+**Q: 権限エラーが発生する**
+```bash
+# Accessibility権限の確認
+# システム設定 > プライバシーとセキュリティ > アクセシビリティ
+# ターミナルと review-setup バイナリの両方を許可
+
+# 入力監視権限の確認（デスクトップ移動が失敗する場合）
+# システム設定 > プライバシーとセキュリティ > 入力監視
+# ターミナルを許可
+
+# 権限を変更した後、ターミナルを再起動
+```
+
+**Q: Swiftバイナリのビルドが失敗する**
+```bash
+# Swift バージョンの確認
+swift --version
+# 必要: Swift 6.2以上
+
+# Xcode Command Line Tools のインストール
+xcode-select --install
+
+# クリーンビルド
+swift package clean
+swift build -c release
 ```
 
 ## 15. 参考資料
 
 - [Git Worktree Documentation](https://git-scm.com/docs/git-worktree)
 - [ghq - GitHub](https://github.com/x-motemen/ghq)
-- [macOS AppleScript Guide](https://developer.apple.com/library/archive/documentation/AppleScript/Conceptual/AppleScriptLangGuide/)
+- [macOS Accessibility API](https://developer.apple.com/documentation/applicationservices/axuielement)
+- [Swift Documentation](https://www.swift.org/documentation/)
+- [GitHub CLI (gh)](https://cli.github.com/)
 - [GitHub REST API - Pull Requests](https://docs.github.com/en/rest/pulls/pulls)
 
 ---
 
-**作成日**: 2026年1月29日  
-**バージョン**: 1.0  
-**ステータス**: 設計完了
+**作成日**: 2026年1月29日
+**最終更新**: 2026年2月2日
+**バージョン**: 1.1
+**ステータス**: 設計完了（Swift実装版）
+
+## 変更履歴
+
+### v1.1 (2026-02-02)
+- AppleScriptベースの実装からSwift + Accessibility APIへ移行
+- Mission Control操作、ウィンドウ配置をすべてSwiftで実装
+- CGEvent APIによるデスクトップ移動機能を追加
+- NSWorkspaceによるアプリケーション起動を追加
+- セキュリティ、パフォーマンス最適化に関する記述を追加
+
+### v1.0 (2026-01-29)
+- 初期設計（AppleScriptベース）
