@@ -63,12 +63,12 @@ class MissionControlManager {
             kAXChildrenAttribute as CFString,
             &childrenRef
         )
-        
+
         guard error == .success,
               let children = childrenRef as? [AXUIElement] else {
             return
         }
-        
+
         for child in children {
             // タイトルを確認
             var titleRef: CFTypeRef?
@@ -77,13 +77,18 @@ class MissionControlManager {
                 kAXTitleAttribute as CFString,
                 &titleRef
             )
-            
+
+            // デバッグ: 見つかった要素を出力
+            if let title = titleRef as? String {
+                print("見つかった要素: \(title)")
+            }
+
             if let title = titleRef as? String,
                title == "Mission Control" {
                 result = child
                 return
             }
-            
+
             // 再帰的に探索
             try findMissionControlGroup(in: child, result: &result)
             if result != nil {
@@ -135,13 +140,58 @@ class MissionControlManager {
     // ボタンをクリック
     private func performPress(on element: AXUIElement) throws {
         let error = AXUIElementPerformAction(element, kAXPressAction as CFString)
-        
+
         guard error == .success else {
             throw NSError(domain: "MissionControl", code: 5,
                          userInfo: [NSLocalizedDescriptionKey: "Failed to press button"])
         }
     }
-    
+
+    // 作成したデスクトップへ移動
+    func moveToNextDesktop() {
+        // Control + 右矢印キーのシミュレーション
+        let rightArrowKeyCode: CGKeyCode = 124
+        let controlKeyCode: CGKeyCode = 59
+
+        // Controlキーを押す
+        let controlDown = CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: controlKeyCode,
+            keyDown: true
+        )
+        controlDown?.flags = .maskControl
+        controlDown?.post(tap: .cghidEventTap)
+
+        // 右矢印キーを押す
+        let keyDown = CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: rightArrowKeyCode,
+            keyDown: true
+        )
+        keyDown?.flags = .maskControl
+        keyDown?.post(tap: .cghidEventTap)
+
+        // 右矢印キーを離す
+        let keyUp = CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: rightArrowKeyCode,
+            keyDown: false
+        )
+        keyUp?.flags = .maskControl
+        keyUp?.post(tap: .cghidEventTap)
+
+        // Controlキーを離す
+        let controlUp = CGEvent(
+            keyboardEventSource: nil,
+            virtualKey: controlKeyCode,
+            keyDown: false
+        )
+        controlUp?.post(tap: .cghidEventTap)
+
+        // デスクトップ切り替えアニメーション待機
+        Thread.sleep(forTimeInterval: 0.5)
+    }
+
 }
 
 // エントリーポイント
@@ -152,6 +202,10 @@ struct ReviewSetupApp {
         do {
             try manager.createNewDesktop()
             print("新しいデスクトップを作成しました")
+
+            // 作成したデスクトップへ移動
+            manager.moveToNextDesktop()
+            print("新しいデスクトップへ移動しました")
         } catch {
             print("エラー: \(error.localizedDescription)")
         }

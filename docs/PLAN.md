@@ -32,11 +32,12 @@
 - **macOS権限の許可**:
   - **Accessibility権限**（必須）:
     - システム設定 > プライバシーとセキュリティ > アクセシビリティ
-    - ターミナルまたは実行バイナリ（`review-setup`）を許可リストに追加
+    - **アプリケーションバンドル（`ReviewSetup.app`）** を許可リストに追加
     - Mission Control UI操作、ウィンドウ配置に必要
+    - **注意**: 単体の実行バイナリ（`.build/release/review-setup`）はアクセシビリティ設定に追加できないため、必ず `.app` 形式を使用すること
   - **入力監視権限**（デスクトップ移動に必要）:
     - システム設定 > プライバシーとセキュリティ > 入力監視
-    - ターミナルまたは実行バイナリを許可リストに追加
+    - アプリケーションバンドル（`ReviewSetup.app`）を許可リストに追加
     - キーボードショートカット（Control + 矢印）のシミュレーションに必要
   - 初回実行時にダイアログが表示される
 
@@ -488,6 +489,9 @@ review-setup/
 │           ├── MissionControlManager       # デスクトップ作成・移動
 │           ├── WindowManager               # ブラウザ/VS Code配置
 │           └── ReviewSetupApp (@main)      # エントリーポイント、CLI引数解析
+├── Resources/
+│   └── Info.plist                          # アプリケーションバンドル用メタデータ
+├── Makefile                                # アプリケーションバンドル作成用
 ├── bin/
 │   ├── setup-pr-review.sh                  # メインスクリプト (Shell)
 │   └── lib/
@@ -545,7 +549,95 @@ review-setup/
 - **Accessibility権限**: ウィンドウの位置・サイズ変更に必須
 - **入力監視権限**: キーボードショートカット（デスクトップ移動）に必須
 
-### 6.2.1 lib/github.sh 実装例
+### 6.2.1 アプリケーションバンドルの作成
+
+macOSのアクセシビリティ設定では、単体の実行バイナリではなく**アプリケーションバンドル（.app）形式**を想定しています。以下の手順でバンドルを作成します。
+
+#### Info.plist の作成
+
+`Resources/Info.plist` を以下の内容で作成:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>review-setup</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.example.review-setup</string>
+    <key>CFBundleName</key>
+    <string>ReviewSetup</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Mission Control操作とウィンドウ配置のためにアクセシビリティ権限が必要です</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>デスクトップ切り替えのために入力監視権限が必要です</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+</dict>
+</plist>
+```
+
+#### アプリケーションバンドル構造
+
+```
+ReviewSetup.app/
+  Contents/
+    Info.plist
+    MacOS/
+      review-setup          # Swiftビルド済みバイナリ
+```
+
+#### Makefile によるビルド自動化
+
+`Makefile` を作成:
+
+```makefile
+.PHONY: build app install clean
+
+APP_NAME = ReviewSetup
+BUNDLE = $(APP_NAME).app
+CONTENTS = $(BUNDLE)/Contents
+MACOS = $(CONTENTS)/MacOS
+RESOURCES = $(CONTENTS)/Resources
+
+build:
+	swift build -c release
+
+app: build
+	mkdir -p $(MACOS)
+	mkdir -p $(RESOURCES)
+	cp .build/release/review-setup $(MACOS)/
+	cp Resources/Info.plist $(CONTENTS)/
+
+install: app
+	rm -rf ~/Applications/$(BUNDLE)
+	cp -R $(BUNDLE) ~/Applications/
+
+clean:
+	rm -rf $(BUNDLE)
+	swift package clean
+```
+
+使用方法:
+```bash
+# アプリケーションバンドルを作成
+make app
+
+# ~/Applications にインストール
+make install
+
+# クリーンアップ
+make clean
+```
+
+### 6.2.2 lib/github.sh 実装例
 ```bash
 #!/bin/bash
 
@@ -722,13 +814,13 @@ main() {
     log "Step 2.1: 指定ファイルをコピー中..."
     copy_ignored_files "${owner}" "${repo}" "${worktree_path}"
     
-    # Step 3: 仮想デスクトップ作成（Swiftバイナリ使用）
+    # Step 3: 仮想デスクトップ作成（.appバンドル内のバイナリ使用）
     log "Step 3: 新規仮想デスクトップを作成中..."
-    "${SCRIPT_DIR}/../.build/release/review-setup"
-    
-    # Step 4: アプリケーション配置（Swiftバイナリ使用）
+    "${SCRIPT_DIR}/../ReviewSetup.app/Contents/MacOS/review-setup"
+
+    # Step 4: アプリケーション配置（.appバンドル内のバイナリ使用）
     log "Step 4: アプリケーションを配置中..."
-    "${SCRIPT_DIR}/../.build/release/review-setup" \
+    "${SCRIPT_DIR}/../ReviewSetup.app/Contents/MacOS/review-setup" \
         --arrange-browser "${pr_url}" \
         --arrange-vscode "${worktree_path}"
     
@@ -756,25 +848,34 @@ main "$1"
 git clone https://github.com/yourusername/review-setup.git
 cd review-setup
 
-# Swiftバイナリのビルド
-swift build -c release
+# アプリケーションバンドルの作成
+make app
 
-# ビルド成果物の確認
-.build/release/review-setup
+# ~/Applications にインストール（推奨）
+make install
+
+# または /Applications にインストール（管理者権限が必要）
+# sudo cp -R ReviewSetup.app /Applications/
+
+# アプリケーションバンドルの確認
+ls -la ~/Applications/ReviewSetup.app
 
 # シェルスクリプトに実行権限付与
 chmod +x bin/setup-pr-review.sh
 
 # PATHに追加（.zshrcまたは.bashrc）
 export PATH="$PATH:/path/to/review-setup/bin"
-export PATH="$PATH:/path/to/review-setup/.build/release"
 
 # 設定ファイル編集
 cp config/config.yml.example config/config.yml
 vi config/config.yml  # 必要に応じて設定
 
-# Accessibility権限の確認
-# 初回実行時にダイアログが表示されるので許可する
+# Accessibility権限の付与
+# 1. システム設定 > プライバシーとセキュリティ > アクセシビリティ を開く
+# 2. 鍵アイコンをクリックして変更を許可
+# 3. 「+」ボタンで ~/Applications/ReviewSetup.app を追加
+# 4. システム設定 > プライバシーとセキュリティ > 入力監視 でも同様に追加
+# 5. 初回実行時にダイアログが表示される場合は許可する
 ```
 
 ### 9.2 日常的な使用
@@ -857,10 +958,13 @@ cleanup_worktree() {
 - ユーザー入力のキャプチャは行わない
 
 **実行ファイルの管理**:
-- Swiftバイナリは個人のホームディレクトリ内で実行
-- 他ユーザーからの読み取りを制限（chmod 700）
-- コード署名（Code Signing）を推奨
-- ビルド成果物（`.build/release/review-setup`）の配布には注意
+- アプリケーションバンドル（`.app`）は `~/Applications` または `/Applications` に配置
+- 他ユーザーからの読み取りを制限する場合は `chmod 700 ReviewSetup.app`
+- **コード署名（Code Signing）** を推奨:
+  - 署名なしの場合、初回起動時にGatekeeperの警告が表示される
+  - `codesign --sign "Developer ID Application" ReviewSetup.app` で署名
+  - App Store配布でない場合は「開発者として確認」で回避可能
+- `.app` バンドルの配布には注意（アクセシビリティ権限が必要なため）
 
 ## 13. パフォーマンス最適化
 
@@ -922,20 +1026,32 @@ gh auth login
 gh pr view ${pr_number}
 ```
 
+**Q: アクセシビリティ設定に追加できない**
+```bash
+# 問題: 単体の実行バイナリ（.build/release/review-setup）は
+#       アクセシビリティ設定の許可リストに追加できない
+
+# 解決策: アプリケーションバンドル（.app）を使用する
+make app
+make install
+
+# システム設定で ~/Applications/ReviewSetup.app を追加する
+```
+
 **Q: デスクトップ作成がうまくいかない**
 ```bash
 # 1. macOSのアクセシビリティ権限を確認
 # システム設定 > プライバシーとセキュリティ > アクセシビリティ
-# ターミナルまたは実行バイナリ (review-setup) を許可リストに追加
+# ReviewSetup.app を許可リストに追加
 
-# 2. Swiftバイナリが正しくビルドされているか確認
-ls -la .build/release/review-setup
+# 2. アプリケーションバンドルが正しく作成されているか確認
+ls -la ~/Applications/ReviewSetup.app/Contents/MacOS/review-setup
 
 # 3. Mission Controlが正常に動作するか確認
 open -a "Mission Control"
 
 # 4. デバッグ実行
-.build/release/review-setup
+~/Applications/ReviewSetup.app/Contents/MacOS/review-setup
 # エラーメッセージを確認
 ```
 
@@ -955,13 +1071,14 @@ which code
 ```bash
 # Accessibility権限の確認
 # システム設定 > プライバシーとセキュリティ > アクセシビリティ
-# ターミナルと review-setup バイナリの両方を許可
+# ReviewSetup.app を許可リストに追加
+# ※ 単体バイナリ（.build/release/review-setup）では追加できない
 
 # 入力監視権限の確認（デスクトップ移動が失敗する場合）
 # システム設定 > プライバシーとセキュリティ > 入力監視
-# ターミナルを許可
+# ReviewSetup.app を許可リストに追加
 
-# 権限を変更した後、ターミナルを再起動
+# 権限を変更した後、アプリケーションを再起動
 ```
 
 **Q: Swiftバイナリのビルドが失敗する**
@@ -974,8 +1091,23 @@ swift --version
 xcode-select --install
 
 # クリーンビルド
-swift package clean
-swift build -c release
+make clean
+make app
+```
+
+**Q: アプリを開けない（Gatekeeper警告）**
+```bash
+# 署名されていないアプリの場合、初回起動時に警告が表示される
+
+# 解決策1: 右クリック > 開く で起動
+# （「開発者を確認できないため開けません」を回避）
+
+# 解決策2: コード署名を行う（開発者証明書が必要）
+codesign --sign "Developer ID Application" ReviewSetup.app
+
+# 解決策3: Gatekeeperを一時的に無効化（非推奨）
+sudo spctl --master-disable
+# 使用後は必ず再度有効化: sudo spctl --master-enable
 ```
 
 ## 15. 参考資料
@@ -991,10 +1123,17 @@ swift build -c release
 
 **作成日**: 2026年1月29日
 **最終更新**: 2026年2月2日
-**バージョン**: 1.1
-**ステータス**: 設計完了（Swift実装版）
+**バージョン**: 1.2
+**ステータス**: 設計完了（Swift実装版 + .app対応）
 
 ## 変更履歴
+
+### v1.2 (2026-02-02)
+- アプリケーションバンドル（.app形式）対応を追加
+- Info.plist とMakefile の追加
+- アクセシビリティ権限の付与手順を .app ベースに更新
+- トラブルシューティングに「アクセシビリティに追加できない」FAQを追加
+- コード署名に関する記述を追加
 
 ### v1.1 (2026-02-02)
 - AppleScriptベースの実装からSwift + Accessibility APIへ移行

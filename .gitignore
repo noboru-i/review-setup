@@ -21,6 +21,9 @@ playground.xcworkspace
 .build/
 .swiftpm/
 
+# Application Bundle
+ReviewSetup.app/
+
 # macOS
 .DS_Store
 
