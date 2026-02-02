@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(swift build:*)",
+      "Bash(.build/release/review-setup)"
+    ]
+  },
   "enabledPlugins": {
     "swift-lsp@claude-plugins-official": true
   }
