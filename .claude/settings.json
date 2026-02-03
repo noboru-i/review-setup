@@ -5,6 +5,7 @@
       "Bash(.build/release/review-setup)"
     ]
   },
+  "plansDirectory": "./docs/plans",
   "enabledPlugins": {
     "swift-lsp@claude-plugins-official": true
   }
