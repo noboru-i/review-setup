@@ -46,12 +46,15 @@ class MissionControlManager {
         
         // 6. ボタンをクリック
         try performPress(on: addButton)
-        
-        // 7. 少し待機
-        Thread.sleep(forTimeInterval: 0.3)
-        
+
+        // 7. デスクトップ作成の完了を待機
+        Thread.sleep(forTimeInterval: 0.5)
+
         // 8. Mission Controlを閉じる（トグル動作）
         openMissionControl()
+
+        // 9. Mission Controlが完全に閉じるまで待機
+        Thread.sleep(forTimeInterval: 0.8)
     }
     
     // Mission Controlグループを探す
@@ -149,44 +152,26 @@ class MissionControlManager {
 
     // 作成したデスクトップへ移動
     func moveToNextDesktop() {
-        // Control + 右矢印キーのシミュレーション
-        let rightArrowKeyCode: CGKeyCode = 124
-        let controlKeyCode: CGKeyCode = 59
+        // AppleScriptを使用してControl + 右矢印を送信
+        // キーコード124は右矢印キー
+        let script = """
+        tell application "System Events"
+            key code 124 using control down
+        end tell
+        """
 
-        // Controlキーを押す
-        let controlDown = CGEvent(
-            keyboardEventSource: nil,
-            virtualKey: controlKeyCode,
-            keyDown: true
-        )
-        controlDown?.flags = .maskControl
-        controlDown?.post(tap: .cghidEventTap)
+        guard let appleScript = NSAppleScript(source: script) else {
+            print("AppleScriptの作成に失敗しました")
+            return
+        }
 
-        // 右矢印キーを押す
-        let keyDown = CGEvent(
-            keyboardEventSource: nil,
-            virtualKey: rightArrowKeyCode,
-            keyDown: true
-        )
-        keyDown?.flags = .maskControl
-        keyDown?.post(tap: .cghidEventTap)
+        var errorInfo: NSDictionary?
+        appleScript.executeAndReturnError(&errorInfo)
 
-        // 右矢印キーを離す
-        let keyUp = CGEvent(
-            keyboardEventSource: nil,
-            virtualKey: rightArrowKeyCode,
-            keyDown: false
-        )
-        keyUp?.flags = .maskControl
-        keyUp?.post(tap: .cghidEventTap)
-
-        // Controlキーを離す
-        let controlUp = CGEvent(
-            keyboardEventSource: nil,
-            virtualKey: controlKeyCode,
-            keyDown: false
-        )
-        controlUp?.post(tap: .cghidEventTap)
+        if let error = errorInfo {
+            print("AppleScript実行エラー: \(error)")
+            return
+        }
 
         // デスクトップ切り替えアニメーション待機
         Thread.sleep(forTimeInterval: 0.5)

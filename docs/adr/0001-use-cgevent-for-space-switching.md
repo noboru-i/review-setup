@@ -2,7 +2,7 @@
 
 ## ステータス
 
-Accepted（承認済み）
+Superseded by [ADR-0002](0002-use-applescript-for-space-switching.md)（ADR-0002により置き換え）
 
 ## 日付
 
