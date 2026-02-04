@@ -3,7 +3,6 @@
     "allow": [
       "Bash(make *)",
       "Bash(swift build *)",
-      "Bash(swift build:*)",
       "Bash(.build/release/review-setup)",
       "Bash(git status *)",
       "Bash(git diff *)"
