@@ -102,7 +102,7 @@ REPO_PATH="${GHQ_ROOT}/github.com/${owner}/${repo}"
 ```bash
 # worktreeディレクトリ名
 WORKTREE_NAME="pr-${pr_number}"
-WORKTREE_PATH="${REPO_PATH}/../${WORKTREE_NAME}"
+WORKTREE_PATH="${REPO_PATH}/../${repo}.worktrees/${WORKTREE_NAME}"
 
 cd "${REPO_PATH}"
 
@@ -663,7 +663,7 @@ create_worktree_with_pr() {
     local repo_path="$2"
 
     local worktree_name="pr-${pr_number}"
-    local worktree_path="${repo_path}/../${worktree_name}"
+    local worktree_path="${repo_path}/../${repo}.worktrees/${worktree_name}"
 
     cd "${repo_path}"
 
